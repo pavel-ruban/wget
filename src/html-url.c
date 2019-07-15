@@ -157,6 +157,8 @@ static struct {
   { TAG_IFRAME,         "src",          ATTR_INLINE | ATTR_HTML },
   { TAG_IMG,            "href",         ATTR_INLINE },
   { TAG_IMG,            "lowsrc",       ATTR_INLINE },
+  { TAG_IMG,            "data-src",     ATTR_INLINE },
+  { TAG_IMG,            "data-srcset",     ATTR_INLINE },
   { TAG_IMG,            "src",          ATTR_INLINE },
   { TAG_INPUT,          "src",          ATTR_INLINE },
   { TAG_LAYER,          "src",          ATTR_INLINE | ATTR_HTML },
@@ -184,6 +186,8 @@ static const char *additional_attributes[] = {
   "content",                    /* used by tag_handle_meta  */
   "action",                     /* used by tag_handle_form  */
   "style",                      /* used by check_style_attr */
+  "data-srcset",                /* used by tag_handle_img */
+  "data-src",                   /* used by tag_handle_img */
   "srcset",                     /* used by tag_handle_img */
 };
 
@@ -682,6 +686,8 @@ tag_handle_meta (int tagid _GL_UNUSED, struct taginfo *tag, struct map_context *
 static void
 tag_handle_img (int tagid, struct taginfo *tag, struct map_context *ctx) {
   int attrind;
+  char *data_srcset;
+  char *data_src;
   char *srcset;
 
   /* Use the generic approach for the attributes without special syntax. */
@@ -711,7 +717,7 @@ tag_handle_img (int tagid, struct taginfo *tag, struct map_context *ctx) {
           url_start = offset + strspn (srcset + offset, " \f\n\r\t,");
 
           if (url_start == size)
-            return;
+            goto data_srcset_attribute;
 
           /* URL is any non-whitespace chars (including commas) - but with
              trailing commas removed. */
@@ -757,6 +763,146 @@ tag_handle_img (int tagid, struct taginfo *tag, struct map_context *ctx) {
           else
             offset = url_end;
         }
+    }
+
+  data_srcset_attribute:
+
+  data_srcset = find_attr (tag, "data-srcset", &attrind);
+  if (data_srcset)
+    {
+      /* These are relative to the input text. */
+      int base_ind = ATTR_POS (tag,attrind,ctx);
+      int size = strlen (data_srcset);
+
+      /* These are relative to srcset. */
+      int offset, url_start, url_end;
+
+      /* Make sure to line up base_ind with srcset[0], not outside quotes. */
+      if (ctx->text[base_ind] == '"' || ctx->text[base_ind] == '\'')
+        ++base_ind;
+
+      offset = 0;
+      while (offset < size)
+        {
+          bool has_descriptor = true;
+
+          /* Skip over initial whitespace and commas. Note there is no \v
+            in HTML5 whitespace. */
+          url_start = offset + strspn (data_srcset + offset, " \f\n\r\t,");
+
+          if (url_start == size)
+            goto data_src_attribute;
+
+          /* URL is any non-whitespace chars (including commas) - but with
+             trailing commas removed. */
+          url_end = url_start + strcspn (data_srcset + url_start, " \f\n\r\t");
+          while ((url_end - 1) > url_start && data_srcset[url_end - 1] == ',')
+            {
+              has_descriptor = false;
+              --url_end;
+            }
+
+          if (url_end > url_start)
+            {
+              char *url_text = strdupdelim (data_srcset + url_start,
+                                            data_srcset + url_end);
+              struct urlpos *up = append_url (url_text, base_ind + url_start,
+                                              url_end - url_start, ctx);
+              if (up)
+                {
+                  up->link_inline_p = 1;
+                  up->link_noquote_html_p = 1;
+                }
+              xfree (url_text);
+            }
+
+          /* If the URL wasn't terminated by a , there may also be a descriptor
+             which we just skip. */
+          if (has_descriptor)
+            {
+              /* This is comma-terminated, except there may be one level of
+                 parentheses escaping that. */
+              bool in_paren = false;
+              for (offset = url_end; offset < size; ++offset)
+                {
+                  char c = data_srcset[offset];
+                  if (c == '(')
+                    in_paren = true;
+                  else if (c == ')' && in_paren)
+                    in_paren = false;
+                  else if (c == ',' && !in_paren)
+                    break;
+                }
+            }
+          else
+            offset = url_end;
+        }
+    }
+
+    data_src_attribute:
+    data_src = find_attr(tag, "data-src", &attrind);
+
+    if (data_src) {
+      /* These are relative to the input text. */
+      int base_ind = ATTR_POS (tag, attrind, ctx);
+      int size = strlen(data_src);
+
+      /* These are relative to srcset. */
+      int offset, url_start, url_end;
+
+      /* Make sure to line up base_ind with srcset[0], not outside quotes. */
+      if (ctx->text[base_ind] == '"' || ctx->text[base_ind] == '\'')
+        ++base_ind;
+
+      offset = 0;
+      while (offset < size) {
+        bool has_descriptor = true;
+
+        /* Skip over initial whitespace and commas. Note there is no \v
+          in HTML5 whitespace. */
+        url_start = offset + strspn(data_src + offset, " \f\n\r\t,");
+
+        if (url_start == size)
+          return;
+
+        /* URL is any non-whitespace chars (including commas) - but with
+           trailing commas removed. */
+        url_end = url_start + strcspn(data_src + url_start, " \f\n\r\t");
+        while ((url_end - 1) > url_start && data_src[url_end - 1] == ',') {
+          has_descriptor = false;
+          --url_end;
+        }
+
+        if (url_end > url_start) {
+          char *url_text = strdupdelim(data_src + url_start,
+                                       data_src + url_end);
+          struct urlpos *up = append_url(url_text, base_ind + url_start,
+                                         url_end - url_start, ctx);
+          if (up) {
+            up->link_inline_p = 1;
+            up->link_noquote_html_p = 1;
+          }
+          xfree (url_text);
+        }
+
+        /* If the URL wasn't terminated by a , there may also be a descriptor
+           which we just skip. */
+        if (has_descriptor) {
+          /* This is comma-terminated, except there may be one level of
+             parentheses escaping that. */
+          bool in_paren = false;
+          for (offset = url_end; offset < size; ++offset) {
+            char c = data_src[offset];
+            if (c == '(')
+              in_paren = true;
+            else if (c == ')' && in_paren)
+              in_paren = false;
+            else if (c == ',' && !in_paren)
+              break;
+          }
+        } else
+          offset = url_end;
+      }
     }
 }
 
@@ -838,6 +984,7 @@ get_urls_html_fm (const char *file, const struct file_memory *fm,
   xfree (meta_charset);
 
   if (ctx.nofollow) {
+
       logprintf(LOG_VERBOSE, _("no-follow attribute found in %s. Will not follow any links on this page\n"), file);
   }
   DEBUGP (("no-follow in %s: %d\n", file, ctx.nofollow));
